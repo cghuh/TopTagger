@@ -12,6 +12,25 @@ class CreateModel:
         initial = tf.truncated_normal(shape, stddev=0.001, name=name)#tf.constant(0.1, shape=shape, name=name)
         return tf.Variable(initial)
     
+    #See https://r2rt.com/implementing-batch-normalization-in-tensorflow.html
+    # this is a simpler version of Tensorflow's 'official' version. See:
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/layers/python/layers/layers.py#L102
+    def batch_norm_wrapper(inputs, is_training, decay = 0.999):
+
+        scale = tf.Variable(tf.ones([inputs.get_shape()[-1]]))
+        beta = tf.Variable(tf.zeros([inputs.get_shape()[-1]]))
+        pop_mean = tf.Variable(tf.zeros([inputs.get_shape()[-1]]), trainable=False)
+        pop_var = tf.Variable(tf.ones([inputs.get_shape()[-1]]), trainable=False)
+
+        if is_training:
+            batch_mean, batch_var = tf.nn.moments(inputs,[0])
+            train_mean = tf.assign(pop_mean, pop_mean * decay + batch_mean * (1 - decay))
+            train_var = tf.assign(pop_var, pop_var * decay + batch_var * (1 - decay))
+            with tf.control_dependencies([train_mean, train_var]):
+                return tf.nn.batch_normalization(inputs, batch_mean, batch_var, beta, scale, epsilon)
+        else:
+            return tf.nn.batch_normalization(inputs, pop_mean, pop_var, beta, scale, epsilon)
+
     def createRecurentLayers(self, inputs, nodes=0, layers=0, keep_prob=1.0, share=None):
         #define variable scope
         with tf.variable_scope("rnn") as scope:
@@ -61,7 +80,11 @@ class CreateModel:
 
         return denseInputLayer
 
-    def createDenseNetwork(self, denseInputLayer, nnStruct, w_fc = {}, b_fc = {}, keep_prob=1.0, prefix=""):
+    def createDenseNetwork(self, denseInputLayer, nnStruct, w_fc = {}, b_fc = {}, keep_prob=1.0, prefix="", batchNormalize=False):
+
+        if prefix=="_ph": is_training = False
+        else: is_training = True
+
         with tf.variable_scope("dense") as scope:
             #constants 
             NLayer = len(nnStruct)
@@ -81,7 +104,10 @@ class CreateModel:
             # create hidden layers 
             for layer in xrange(1, NLayer - 1):
                 #use relu for hidden layers as this seems to give best result
-                layerOutput = tf.nn.relu(tf.add(tf.matmul(h_fc[layer - 1], w_fc[layer - 1], name="z_fc%i%s"%(layer,prefix)),  b_fc[layer - 1], name="a_fc%i%s"%(layer,prefix)), name="h_fc%i%s"%(layer,prefix))
+                if batchNormalize:
+                    layerOutput = tf.nn.relu(batch_norm_wrapper(tf.matmul(h_fc[layer - 1], w_fc[layer - 1], name="z_fc%i%s"%(layer,prefix)),  is_training), name="h_fc%i%s"%(layer,prefix))
+                else:
+                    layerOutput = tf.nn.relu(tf.add(tf.matmul(h_fc[layer - 1], w_fc[layer - 1], name="z_fc%i%s"%(layer,prefix)),  b_fc[layer - 1], name="a_fc%i%s"%(layer,prefix)), name="h_fc%i%s"%(layer,prefix))
                 h_fc[layer] = tf.nn.dropout(layerOutput, keep_prob)
                 
                 # Map the features to next layer
